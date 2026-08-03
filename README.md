@@ -110,4 +110,4 @@ https://github.com/cleverpigeb/SillyTavern-Stream-Helper
 
 ## 许可证
 
-本项目使用 [MIT License](LICENSE)。
+本项目使用 [GNU General Public License v3.0](LICENSE)。
