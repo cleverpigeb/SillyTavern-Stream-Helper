@@ -1,12 +1,12 @@
 {
-  "display_name": "模型路由观察器",
+  "display_name": "酒馆流式助手",
   "loading_order": 1,
   "requires": [],
   "optional": [],
   "js": "index.js",
   "css": "style.css",
-  "author": "Codex for tony3",
-  "version": "1.2.0",
+  "author": "聪朱",
+  "version": "1.4.0",
   "minimum_client_version": "1.18.0",
   "auto_update": false
 }

@@ -1,30 +1,48 @@
-const EXTENSION_ID = 'st-model-trace';
-const STORAGE_KEY = `${EXTENSION_ID}:history:v1`;
-const MAX_HISTORY = 50;
+const EXTENSION_ID = 'st-stream-helper';
+const LEGACY_HISTORY_KEY = `${EXTENSION_ID}:history:v1`;
+const SETTINGS_KEY = `${EXTENSION_ID}:settings:v1`;
+const DEFAULT_HISTORY_LIMIT = 6;
+const MIN_HISTORY_LIMIT = 1;
+const MAX_HISTORY_LIMIT = 1000;
 const TARGET_PATH = '/api/backends/chat-completions/generate';
 const PATCH_KEY = Symbol.for(`${EXTENSION_ID}:fetch-patch`);
 
-let history = loadHistory();
+let historyLimit = loadHistoryLimit();
+let history = [];
 let panelOpen = false;
-// Full prompts and replies can be sensitive and large. Keep them only in memory for
-// the current page session; persistent history continues to contain metadata only.
+// Requests, responses, and their metadata stay in memory for the current page only.
 const sessionRaw = new Map();
 
-function loadHistory() {
+function normalizeHistoryLimit(value, fallback = DEFAULT_HISTORY_LIMIT) {
+    if (value === '' || value === null || value === undefined) return fallback;
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return fallback;
+    return Math.min(MAX_HISTORY_LIMIT, Math.max(MIN_HISTORY_LIMIT, Math.trunc(numericValue)));
+}
+
+function loadHistoryLimit() {
     try {
-        const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-        return Array.isArray(value) ? value.slice(0, MAX_HISTORY) : [];
+        const settings = JSON.parse(localStorage.getItem(SETTINGS_KEY) || 'null');
+        return normalizeHistoryLimit(settings?.historyLimit);
     } catch (error) {
-        console.warn('[模型路由观察器] 无法读取历史记录。', error);
-        return [];
+        console.warn('[酒馆流式助手] 无法读取自动清理设置。', error);
+        return DEFAULT_HISTORY_LIMIT;
     }
 }
 
-function saveHistory() {
+function saveHistoryLimit() {
     try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(history.slice(0, MAX_HISTORY)));
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify({ historyLimit }));
     } catch (error) {
-        console.warn('[模型路由观察器] 无法保存历史记录。', error);
+        console.warn('[酒馆流式助手] 无法保存自动清理设置。', error);
+    }
+}
+
+function clearLegacyHistory() {
+    try {
+        localStorage.removeItem(LEGACY_HISTORY_KEY);
+    } catch (error) {
+        console.warn('[酒馆流式助手] 无法清理旧版持久化记录。', error);
     }
 }
 
@@ -33,6 +51,11 @@ function pruneSessionRaw() {
     for (const localId of sessionRaw.keys()) {
         if (!retainedIds.has(localId)) sessionRaw.delete(localId);
     }
+}
+
+function applyRetentionLimit() {
+    history = history.slice(0, historyLimit);
+    pruneSessionRaw();
 }
 
 function isTargetRequest(input) {
@@ -304,9 +327,8 @@ async function inspectResponseBody(record, response) {
 function finishRecord(record, state = 'complete') {
     record.finishedAt = new Date().toISOString();
     record.state = state;
-    history = [record, ...history.filter(item => item.localId !== record.localId)].slice(0, MAX_HISTORY);
-    pruneSessionRaw();
-    saveHistory();
+    history = [record, ...history.filter(item => item.localId !== record.localId)];
+    applyRetentionLimit();
     render();
 }
 
@@ -354,14 +376,14 @@ function installFetchObserver() {
     const originalFetch = window.fetch.bind(window);
     window[PATCH_KEY] = { originalFetch };
 
-    window.fetch = async function modelTraceFetch(input, init) {
+    window.fetch = async function streamHelperFetch(input, init) {
         if (!isTargetRequest(input)) return originalFetch(input, init);
 
         const rawRequest = readRawRequestBody(init);
         const record = newRecord(readRequestedModel(input, init));
         rawEntry(record).request = rawRequest;
-        history = [record, ...history].slice(0, MAX_HISTORY);
-        pruneSessionRaw();
+        history = [record, ...history];
+        applyRetentionLimit();
         render();
 
         const signal = init?.signal;
@@ -456,7 +478,7 @@ async function copyText(text) {
 function makeCopyButton(label, textProvider, unavailableReason) {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'stmtr-copy-button';
+    button.className = 'stsh-copy-button';
     button.textContent = label;
     const initialText = textProvider();
     button.disabled = typeof initialText !== 'string';
@@ -470,7 +492,7 @@ function makeCopyButton(label, textProvider, unavailableReason) {
             await copyText(text);
             button.textContent = '已复制';
         } catch (error) {
-            console.error('[模型路由观察器] 复制失败。', error);
+            console.error('[酒馆流式助手] 复制失败。', error);
             button.textContent = '复制失败';
         }
         setTimeout(() => { button.textContent = originalLabel; }, 1400);
@@ -481,13 +503,13 @@ function makeCopyButton(label, textProvider, unavailableReason) {
 
 function buildRecordCard(record) {
     const card = document.createElement('article');
-    card.className = 'stmtr-card';
+    card.className = 'stsh-card';
     const verdict = verdictFor(record);
 
     const header = document.createElement('div');
-    header.className = 'stmtr-card-header';
-    addText(header, 'stmtr-time', formatTime(record.startedAt));
-    addText(header, `stmtr-status stmtr-status-${verdict.key}`, verdict.label);
+    header.className = 'stsh-card-header';
+    addText(header, 'stsh-time', formatTime(record.startedAt));
+    addText(header, `stsh-status stsh-status-${verdict.key}`, verdict.label);
     card.append(header);
 
     const rows = [
@@ -509,7 +531,7 @@ function buildRecordCard(record) {
     if (record.error) rows.push(['错误', record.error]);
 
     const table = document.createElement('dl');
-    table.className = 'stmtr-rows';
+    table.className = 'stsh-rows';
     for (const [label, value] of rows) {
         const dt = document.createElement('dt');
         dt.textContent = label;
@@ -521,7 +543,7 @@ function buildRecordCard(record) {
 
     const raw = sessionRaw.get(record.localId);
     const copyActions = document.createElement('div');
-    copyActions.className = 'stmtr-copy-actions';
+    copyActions.className = 'stsh-copy-actions';
     const replyButtonLabel = record.state === 'aborted'
         ? '复制已接收原始回复'
         : record.state === 'running'
@@ -551,7 +573,7 @@ function ensureUi() {
     button.type = 'button';
     button.title = '查看模型路由记录';
     button.setAttribute('aria-label', '查看模型路由记录');
-    button.innerHTML = '<span class="stmtr-button-label">模型</span><span class="stmtr-button-count">0</span>';
+    button.innerHTML = '<span class="stsh-button-label">流式</span><span class="stsh-button-count">0</span>';
     button.addEventListener('click', () => {
         panelOpen = !panelOpen;
         render();
@@ -559,7 +581,7 @@ function ensureUi() {
 
     const panel = document.createElement('aside');
     panel.id = `${EXTENSION_ID}-panel`;
-    panel.setAttribute('aria-label', '模型路由观察器');
+    panel.setAttribute('aria-label', '酒馆流式助手');
 
     document.body.append(button, panel);
 }
@@ -568,7 +590,7 @@ function downloadHistory() {
     const blob = new Blob([JSON.stringify(history, null, 2)], { type: 'application/json' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `sillytavern-model-trace-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    link.download = `sillytavern-stream-helper-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }
@@ -579,19 +601,19 @@ function render() {
     const panel = document.getElementById(`${EXTENSION_ID}-panel`);
     if (!button || !panel) return;
 
-    button.querySelector('.stmtr-button-count').textContent = String(history.length);
-    panel.classList.toggle('stmtr-open', panelOpen);
+    button.querySelector('.stsh-button-count').textContent = String(history.length);
+    panel.classList.toggle('stsh-open', panelOpen);
     panel.replaceChildren();
 
     const heading = document.createElement('header');
-    heading.className = 'stmtr-panel-header';
+    heading.className = 'stsh-panel-header';
     const titleWrap = document.createElement('div');
-    addText(titleWrap, 'stmtr-title', '模型路由观察器');
-    addText(titleWrap, 'stmtr-subtitle', 'SillyTavern 1.18.0 · 原文仅存当前页面内存');
+    addText(titleWrap, 'stsh-title', '酒馆流式助手');
+    addText(titleWrap, 'stsh-subtitle', 'SillyTavern 1.18.0 · 记录与原文仅存当前页面内存');
 
     const close = document.createElement('button');
     close.type = 'button';
-    close.className = 'stmtr-close';
+    close.className = 'stsh-close';
     close.textContent = '×';
     close.setAttribute('aria-label', '关闭');
     close.addEventListener('click', () => {
@@ -600,12 +622,29 @@ function render() {
     });
     heading.append(titleWrap, close);
 
-    const notice = document.createElement('p');
-    notice.className = 'stmtr-notice';
-    notice.textContent = '完整输入和原始回复可能含有隐私，仅在当前页面内存中保留，刷新后即丢失；模型历史中持久保存的仍只有元数据。';
-
     const actions = document.createElement('div');
-    actions.className = 'stmtr-actions';
+    actions.className = 'stsh-actions';
+    const retentionControl = document.createElement('label');
+    retentionControl.className = 'stsh-retention-control';
+    const retentionPrefix = document.createElement('span');
+    retentionPrefix.textContent = '保留最近';
+    const retentionInput = document.createElement('input');
+    retentionInput.type = 'number';
+    retentionInput.min = String(MIN_HISTORY_LIMIT);
+    retentionInput.max = String(MAX_HISTORY_LIMIT);
+    retentionInput.step = '1';
+    retentionInput.value = String(historyLimit);
+    retentionInput.title = `可设置 ${MIN_HISTORY_LIMIT}–${MAX_HISTORY_LIMIT} 条`;
+    retentionInput.setAttribute('aria-label', '自动保留的记录数量');
+    retentionInput.addEventListener('change', () => {
+        historyLimit = normalizeHistoryLimit(retentionInput.value, historyLimit);
+        saveHistoryLimit();
+        applyRetentionLimit();
+        render();
+    });
+    const retentionSuffix = document.createElement('span');
+    retentionSuffix.textContent = '条记录';
+    retentionControl.append(retentionPrefix, retentionInput, retentionSuffix);
     const exportButton = document.createElement('button');
     exportButton.type = 'button';
     exportButton.textContent = '导出 JSON';
@@ -616,29 +655,31 @@ function render() {
     clearButton.textContent = '清空记录';
     clearButton.disabled = history.length === 0;
     clearButton.addEventListener('click', () => {
-        if (!confirm('清空模型路由观察器的本地记录？')) return;
+        if (!confirm('清空酒馆流式助手的本地记录？')) return;
         history = [];
         sessionRaw.clear();
-        saveHistory();
         render();
     });
-    actions.append(exportButton, clearButton);
+    actions.append(retentionControl, exportButton, clearButton);
 
     const list = document.createElement('div');
-    list.className = 'stmtr-list';
+    list.className = 'stsh-list';
     if (history.length === 0) {
-        addText(list, 'stmtr-empty', '尚无记录。下一次聊天补全请求会自动出现在这里。');
+        addText(list, 'stsh-empty', '尚无记录。下一次聊天补全请求会自动出现在这里。');
     } else {
         history.forEach(record => list.append(buildRecordCard(record)));
     }
 
-    panel.append(heading, notice, actions, list);
+    panel.append(heading, actions, list);
 }
 
 function init() {
+    clearLegacyHistory();
+    applyRetentionLimit();
+    saveHistoryLimit();
     installFetchObserver();
     render();
-    console.info('[模型路由观察器] 已启用；完整输入与原始回复仅在当前页面内存中临时保存。');
+    console.info('[酒馆流式助手] 已启用；请求记录、完整输入与原始回复仅在当前页面内存中临时保存。');
 }
 
 if (document.readyState === 'loading') {
