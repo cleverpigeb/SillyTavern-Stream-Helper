@@ -4,10 +4,12 @@ const SETTINGS_KEY = `${EXTENSION_ID}:settings:v1`;
 const DEFAULT_HISTORY_LIMIT = 6;
 const MIN_HISTORY_LIMIT = 1;
 const MAX_HISTORY_LIMIT = 1000;
+const FALLBACK_COUNT_COLOR = '#4f6bed';
 const TARGET_PATH = '/api/backends/chat-completions/generate';
 const PATCH_KEY = Symbol.for(`${EXTENSION_ID}:fetch-patch`);
 
 let historyLimit = loadHistoryLimit();
+let countColor = loadCountColor();
 let history = [];
 let panelOpen = false;
 // Requests, responses, and their metadata stay in memory for the current page only.
@@ -30,11 +32,58 @@ function loadHistoryLimit() {
     }
 }
 
-function saveHistoryLimit() {
+function normalizeCountColor(value) {
+    if (typeof value !== 'string') return null;
+    const match = value.trim().match(/^#([\da-f]{6})$/i);
+    return match ? `#${match[1].toLowerCase()}` : null;
+}
+
+function loadCountColor() {
     try {
-        localStorage.setItem(SETTINGS_KEY, JSON.stringify({ historyLimit }));
+        const settings = JSON.parse(localStorage.getItem(SETTINGS_KEY) || 'null');
+        return normalizeCountColor(settings?.countColor);
     } catch (error) {
-        console.warn('[酒馆流式助手] 无法保存自动清理设置。', error);
+        console.warn('[酒馆流式助手] 无法读取数字圈颜色设置。', error);
+        return null;
+    }
+}
+
+function saveSettings() {
+    try {
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify({ historyLimit, countColor }));
+    } catch (error) {
+        console.warn('[酒馆流式助手] 无法保存插件设置。', error);
+    }
+}
+
+function computedColorToHex(value) {
+    const directHex = normalizeCountColor(value);
+    if (directHex) return directHex;
+    if (!value || !document.body || !globalThis.CSS?.supports?.('color', value)) return null;
+
+    const probe = document.createElement('span');
+    probe.style.display = 'none';
+    probe.style.color = value;
+    document.body.append(probe);
+    const channels = getComputedStyle(probe).color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+    probe.remove();
+    if (!channels || channels.length !== 3 || channels.some(channel => !Number.isFinite(channel))) return null;
+    return `#${channels.map(channel => Math.max(0, Math.min(255, Math.round(channel))).toString(16).padStart(2, '0')).join('')}`;
+}
+
+function themeCountColorForPicker() {
+    const themeColor = getComputedStyle(document.documentElement)
+        .getPropertyValue('--SmartThemeQuoteColor')
+        .trim();
+    return computedColorToHex(themeColor) || FALLBACK_COUNT_COLOR;
+}
+
+function applyCountColor(button = document.getElementById(`${EXTENSION_ID}-button`)) {
+    if (!button) return;
+    if (countColor) {
+        button.style.setProperty('--stsh-count-color', countColor);
+    } else {
+        button.style.removeProperty('--stsh-count-color');
     }
 }
 
@@ -411,23 +460,56 @@ function sortedCounts(counter) {
     return Object.entries(counter || {}).sort((a, b) => b[1] - a[1]);
 }
 
+function normalizeModelForComparison(value) {
+    const model = firstString(value);
+    if (!model) return null;
+
+    // Build a comparison key without changing the raw name shown to the user.
+    // Normalize display variants, routing tags, provider paths, case, and separators.
+    let candidate = model.normalize('NFKC').trim();
+    candidate = candidate.replace(/^(?:\[[^\]\r\n]{1,32}\]\s*)+/, '').trim();
+
+    const pathSegments = candidate.split('/').map(item => item.trim()).filter(Boolean);
+    candidate = pathSegments[pathSegments.length - 1] || candidate;
+    candidate = candidate.replace(/^(?:\[[^\]\r\n]{1,32}\]\s*)+/, '').trim();
+
+    const tokens = candidate.toLowerCase().match(/[\p{L}\p{N}]+/gu);
+    return tokens?.join(':') || candidate.toLowerCase() || model.toLowerCase();
+}
+
+function comparableModelCounts(counter) {
+    const groupedCounts = new Map();
+    for (const [model, count] of Object.entries(counter || {})) {
+        const comparableModel = normalizeModelForComparison(model);
+        if (!comparableModel) continue;
+        groupedCounts.set(comparableModel, (groupedCounts.get(comparableModel) || 0) + count);
+    }
+    return [...groupedCounts.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+function modelNamesEqual(left, right) {
+    const comparableLeft = normalizeModelForComparison(left);
+    const comparableRight = normalizeModelForComparison(right);
+    return Boolean(comparableLeft && comparableRight && comparableLeft === comparableRight);
+}
+
 function verdictFor(record) {
     if (record.state === 'running') return { key: 'running', label: '接收中' };
     if (record.state === 'aborted') return { key: 'warning', label: '用户中止（已保留接收部分）' };
     if (record.state !== 'complete') return { key: 'error', label: '检查失败' };
 
-    const contentModels = sortedCounts(record.contentModelCounts);
-    const streamModels = sortedCounts(record.streamModelCounts);
+    const contentModels = comparableModelCounts(record.contentModelCounts);
+    const streamModels = comparableModelCounts(record.streamModelCounts);
     const evidenceModels = contentModels.length ? contentModels : streamModels;
     const primaryModel = evidenceModels[0]?.[0] || null;
     const anomalies = [];
 
     if (!primaryModel) anomalies.push('响应未报告模型');
     if (contentModels.length > 1) anomalies.push('正文分片模型混杂');
-    if (record.requestedModel && primaryModel && record.requestedModel !== primaryModel) {
+    if (record.requestedModel && primaryModel && !modelNamesEqual(record.requestedModel, primaryModel)) {
         anomalies.push('请求模型与正文模型不同');
     }
-    if (record.finalUsageModel && primaryModel && record.finalUsageModel !== primaryModel) {
+    if (record.finalUsageModel && primaryModel && !modelNamesEqual(record.finalUsageModel, primaryModel)) {
         anomalies.push('最终 usage 标记与正文模型不同');
     }
 
@@ -601,6 +683,7 @@ function render() {
     const panel = document.getElementById(`${EXTENSION_ID}-panel`);
     if (!button || !panel) return;
 
+    applyCountColor(button);
     button.querySelector('.stsh-button-count').textContent = String(history.length);
     panel.classList.toggle('stsh-open', panelOpen);
     panel.replaceChildren();
@@ -638,13 +721,62 @@ function render() {
     retentionInput.setAttribute('aria-label', '自动保留的记录数量');
     retentionInput.addEventListener('change', () => {
         historyLimit = normalizeHistoryLimit(retentionInput.value, historyLimit);
-        saveHistoryLimit();
+        saveSettings();
         applyRetentionLimit();
         render();
     });
     const retentionSuffix = document.createElement('span');
     retentionSuffix.textContent = '条记录';
     retentionControl.append(retentionPrefix, retentionInput, retentionSuffix);
+
+    const colorControl = document.createElement('label');
+    colorControl.className = 'stsh-color-control';
+    const colorLabel = document.createElement('span');
+    colorLabel.textContent = '数字圈颜色';
+    const colorInput = document.createElement('input');
+    colorInput.type = 'color';
+    colorInput.value = countColor || themeCountColorForPicker();
+    colorInput.setAttribute('aria-label', '选择数字圈自定义颜色');
+    const colorMode = document.createElement('span');
+    colorMode.className = 'stsh-color-mode';
+    const resetColorButton = document.createElement('button');
+    resetColorButton.type = 'button';
+    resetColorButton.className = 'stsh-reset-color';
+    resetColorButton.textContent = '恢复主题色';
+
+    const updateColorControl = () => {
+        const usingCustomColor = Boolean(countColor);
+        colorMode.textContent = usingCustomColor ? '自定义' : '主题';
+        colorInput.title = usingCustomColor
+            ? `当前自定义颜色：${countColor}`
+            : '当前跟随 SillyTavern 主题色';
+        resetColorButton.disabled = !usingCustomColor;
+        resetColorButton.title = usingCustomColor ? '改回跟随 SillyTavern 主题色' : '当前已跟随主题色';
+    };
+
+    const selectCountColor = () => {
+        const selectedColor = normalizeCountColor(colorInput.value);
+        if (!selectedColor) return;
+        countColor = selectedColor;
+        applyCountColor(button);
+        updateColorControl();
+    };
+
+    colorInput.addEventListener('input', selectCountColor);
+    colorInput.addEventListener('change', () => {
+        selectCountColor();
+        saveSettings();
+    });
+    resetColorButton.addEventListener('click', () => {
+        countColor = null;
+        saveSettings();
+        applyCountColor(button);
+        colorInput.value = themeCountColorForPicker();
+        updateColorControl();
+    });
+    updateColorControl();
+    colorControl.append(colorLabel, colorInput, colorMode);
+
     const exportButton = document.createElement('button');
     exportButton.type = 'button';
     exportButton.textContent = '导出 JSON';
@@ -660,7 +792,7 @@ function render() {
         sessionRaw.clear();
         render();
     });
-    actions.append(retentionControl, exportButton, clearButton);
+    actions.append(retentionControl, colorControl, resetColorButton, exportButton, clearButton);
 
     const list = document.createElement('div');
     list.className = 'stsh-list';
@@ -676,7 +808,7 @@ function render() {
 function init() {
     clearLegacyHistory();
     applyRetentionLimit();
-    saveHistoryLimit();
+    saveSettings();
     installFetchObserver();
     render();
     console.info('[酒馆流式助手] 已启用；请求记录、完整输入与原始回复仅在当前页面内存中临时保存。');

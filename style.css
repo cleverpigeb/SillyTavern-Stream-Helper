@@ -1,5 +1,6 @@
 #st-stream-helper-button {
     position: fixed;
+    box-sizing: border-box;
     right: max(16px, env(safe-area-inset-right));
     bottom: max(84px, calc(env(safe-area-inset-bottom) + 72px));
     z-index: 30000;
@@ -15,7 +16,14 @@
     border-radius: 999px;
     box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
     cursor: pointer;
+    touch-action: manipulation;
     backdrop-filter: blur(12px);
+}
+
+#st-stream-helper-button *,
+#st-stream-helper-panel,
+#st-stream-helper-panel * {
+    box-sizing: border-box;
 }
 
 #st-stream-helper-button:hover {
@@ -33,7 +41,7 @@
     height: 19px;
     padding: 0 5px;
     color: #fff;
-    background: #4f6bed;
+    background: var(--stsh-count-color, var(--SmartThemeQuoteColor, var(--SmartThemeUnderlineColor, #4f6bed)));
     border-radius: 999px;
     font-size: 11px;
 }
@@ -42,17 +50,24 @@
     position: fixed;
     top: 0;
     right: 0;
-    bottom: 0;
+    bottom: auto;
     z-index: 30001;
     display: flex;
     flex-direction: column;
     width: min(460px, 94vw);
-    padding: max(16px, env(safe-area-inset-top)) 14px max(16px, env(safe-area-inset-bottom));
+    max-width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    padding: max(16px, env(safe-area-inset-top))
+        max(14px, env(safe-area-inset-right))
+        max(16px, env(safe-area-inset-bottom))
+        max(14px, env(safe-area-inset-left));
     color: var(--SmartThemeBodyColor, #eee);
     background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #111) 96%, transparent);
     border-left: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor, #eee) 18%, transparent);
     box-shadow: -12px 0 40px rgb(0 0 0 / 40%);
     backdrop-filter: blur(18px);
+    overflow: hidden;
     transform: translateX(105%);
     visibility: hidden;
     transition: transform 180ms ease, visibility 180ms;
@@ -77,11 +92,20 @@
     font-weight: 800;
 }
 
+.stsh-panel-header {
+    flex: 0 0 auto;
+}
+
+.stsh-panel-header > div:first-child {
+    min-width: 0;
+}
+
 .stsh-subtitle,
 .stsh-time {
     margin-top: 2px;
     opacity: .65;
     font-size: 12px;
+    overflow-wrap: anywhere;
 }
 
 .stsh-close,
@@ -92,9 +116,11 @@
     border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor, #eee) 18%, transparent);
     border-radius: 8px;
     cursor: pointer;
+    touch-action: manipulation;
 }
 
 .stsh-close {
+    flex: 0 0 auto;
     width: 34px;
     height: 34px;
     font-size: 24px;
@@ -102,8 +128,10 @@
 }
 
 .stsh-actions {
+    flex: 0 0 auto;
     justify-content: flex-start;
     flex-wrap: wrap;
+    margin-top: 12px;
     margin-bottom: 10px;
 }
 
@@ -117,6 +145,30 @@
     gap: 6px;
     min-height: 34px;
     font-size: 12px;
+}
+
+.stsh-color-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 34px;
+    font-size: 12px;
+}
+
+.stsh-color-control input[type="color"] {
+    width: 38px;
+    height: 34px;
+    padding: 3px;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor, #eee) 9%, transparent);
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor, #eee) 18%, transparent);
+    border-radius: 8px;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.stsh-color-mode {
+    min-width: 3em;
+    opacity: .65;
 }
 
 .stsh-retention-control input {
@@ -156,17 +208,23 @@
 }
 
 .stsh-list {
+    flex: 1 1 auto;
     min-height: 0;
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
     padding: 2px 2px 24px;
 }
 
 .stsh-card {
+    width: 100%;
     margin-bottom: 10px;
     padding: 12px;
     background: color-mix(in srgb, var(--SmartThemeBodyColor, #eee) 5%, transparent);
     border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor, #eee) 14%, transparent);
     border-radius: 11px;
+    overflow: hidden;
 }
 
 .stsh-status {
@@ -175,6 +233,7 @@
     border-radius: 6px;
     font-size: 11px;
     text-align: right;
+    overflow-wrap: anywhere;
 }
 
 .stsh-status-ok { color: #8fe3a1; background: rgb(39 174 96 / 15%); }
@@ -210,14 +269,113 @@
 
 @media (max-width: 520px) {
     #st-stream-helper-panel {
-        width: 100vw;
+        width: 100%;
+        max-width: none;
+        padding: max(12px, env(safe-area-inset-top))
+            max(12px, env(safe-area-inset-right))
+            max(12px, env(safe-area-inset-bottom))
+            max(12px, env(safe-area-inset-left));
+        border-left: 0;
     }
 
     #st-stream-helper-button {
+        right: max(10px, env(safe-area-inset-right));
         bottom: max(72px, calc(env(safe-area-inset-bottom) + 62px));
+        min-width: 64px;
+        height: 44px;
+        padding: 0 12px;
+    }
+
+    .stsh-panel-header {
+        align-items: flex-start;
+    }
+
+    .stsh-close {
+        width: 44px;
+        height: 44px;
+    }
+
+    .stsh-actions {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        width: 100%;
+        gap: 8px;
+    }
+
+    .stsh-actions button {
+        width: 100%;
+        min-height: 44px;
+        padding: 9px 10px;
+    }
+
+    .stsh-retention-control,
+    .stsh-color-control {
+        grid-column: 1 / -1;
+        justify-content: space-between;
+        width: 100%;
+        min-height: 44px;
+        font-size: 13px;
+    }
+
+    .stsh-retention-control input {
+        width: 76px;
+        height: 44px;
+        font-size: 16px;
+    }
+
+    .stsh-color-control input[type="color"] {
+        width: 52px;
+        height: 44px;
     }
 
     .stsh-copy-actions {
         grid-template-columns: 1fr;
+    }
+
+    .stsh-copy-button {
+        min-height: 44px;
+        padding: 10px;
+        font-size: 13px;
+    }
+
+    .stsh-card-header {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .stsh-status {
+        max-width: 100%;
+        text-align: left;
+    }
+
+    .stsh-rows {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 2px;
+        font-size: 13px;
+    }
+
+    .stsh-rows dt {
+        margin-top: 8px;
+        font-size: 11px;
+    }
+
+    .stsh-rows dt:first-child {
+        margin-top: 0;
+    }
+
+    .stsh-card {
+        padding: 10px;
+    }
+}
+
+@media (max-width: 360px) {
+    .stsh-actions {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .stsh-retention-control,
+    .stsh-color-control {
+        grid-column: 1;
     }
 }
