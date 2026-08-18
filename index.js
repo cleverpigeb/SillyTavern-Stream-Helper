@@ -5,11 +5,14 @@ const DEFAULT_HISTORY_LIMIT = 6;
 const MIN_HISTORY_LIMIT = 1;
 const MAX_HISTORY_LIMIT = 1000;
 const FALLBACK_COUNT_COLOR = '#4f6bed';
+const BUTTON_EDGE_MARGIN = 8;
+const BUTTON_DRAG_THRESHOLD = 6;
 const TARGET_PATH = '/api/backends/chat-completions/generate';
 const PATCH_KEY = Symbol.for(`${EXTENSION_ID}:fetch-patch`);
 
 let historyLimit = loadHistoryLimit();
 let countColor = loadCountColor();
+let buttonPosition = loadButtonPosition();
 let history = [];
 let panelOpen = false;
 // Requests, responses, and their metadata stay in memory for the current page only.
@@ -48,9 +51,26 @@ function loadCountColor() {
     }
 }
 
+function normalizeButtonPosition(value) {
+    const x = Number(value?.x);
+    const y = Number(value?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) };
+}
+
+function loadButtonPosition() {
+    try {
+        const settings = JSON.parse(localStorage.getItem(SETTINGS_KEY) || 'null');
+        return normalizeButtonPosition(settings?.buttonPosition);
+    } catch (error) {
+        console.warn('[酒馆流式助手] 无法读取按钮位置设置。', error);
+        return null;
+    }
+}
+
 function saveSettings() {
     try {
-        localStorage.setItem(SETTINGS_KEY, JSON.stringify({ historyLimit, countColor }));
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify({ historyLimit, countColor, buttonPosition }));
     } catch (error) {
         console.warn('[酒馆流式助手] 无法保存插件设置。', error);
     }
@@ -85,6 +105,94 @@ function applyCountColor(button = document.getElementById(`${EXTENSION_ID}-butto
     } else {
         button.style.removeProperty('--stsh-count-color');
     }
+}
+
+function buttonPositionBounds(button) {
+    const viewport = window.visualViewport;
+    const width = viewport?.width || document.documentElement.clientWidth || window.innerWidth;
+    const height = viewport?.height || document.documentElement.clientHeight || window.innerHeight;
+    const rect = button.getBoundingClientRect();
+    return {
+        minLeft: BUTTON_EDGE_MARGIN,
+        minTop: BUTTON_EDGE_MARGIN,
+        maxLeft: Math.max(BUTTON_EDGE_MARGIN, width - rect.width - BUTTON_EDGE_MARGIN),
+        maxTop: Math.max(BUTTON_EDGE_MARGIN, height - rect.height - BUTTON_EDGE_MARGIN),
+    };
+}
+
+function setButtonPixelPosition(button, left, top) {
+    const bounds = buttonPositionBounds(button);
+    button.style.left = `${Math.min(bounds.maxLeft, Math.max(bounds.minLeft, left))}px`;
+    button.style.top = `${Math.min(bounds.maxTop, Math.max(bounds.minTop, top))}px`;
+    button.style.right = 'auto';
+    button.style.bottom = 'auto';
+}
+
+function applyButtonPosition(button) {
+    if (!buttonPosition) return;
+    const bounds = buttonPositionBounds(button);
+    setButtonPixelPosition(
+        button,
+        bounds.minLeft + buttonPosition.x * (bounds.maxLeft - bounds.minLeft),
+        bounds.minTop + buttonPosition.y * (bounds.maxTop - bounds.minTop),
+    );
+}
+
+function installButtonDrag(button) {
+    let gesture = null;
+    let suppressClickUntil = 0;
+
+    button.addEventListener('pointerdown', (event) => {
+        if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        const rect = button.getBoundingClientRect();
+        gesture = { id: event.pointerId, x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, moved: false };
+        button.setPointerCapture?.(event.pointerId);
+    });
+
+    button.addEventListener('pointermove', (event) => {
+        if (!gesture || event.pointerId !== gesture.id) return;
+        const dx = event.clientX - gesture.x;
+        const dy = event.clientY - gesture.y;
+        if (!gesture.moved && Math.hypot(dx, dy) < BUTTON_DRAG_THRESHOLD) return;
+        gesture.moved = true;
+        event.preventDefault();
+        button.classList.add('stsh-dragging');
+        setButtonPixelPosition(button, gesture.left + dx, gesture.top + dy);
+    });
+
+    const finishGesture = (event) => {
+        if (!gesture || event.pointerId !== gesture.id) return;
+        if (gesture.moved) {
+            const rect = button.getBoundingClientRect();
+            const bounds = buttonPositionBounds(button);
+            buttonPosition = {
+                x: (rect.left - bounds.minLeft) / Math.max(1, bounds.maxLeft - bounds.minLeft),
+                y: (rect.top - bounds.minTop) / Math.max(1, bounds.maxTop - bounds.minTop),
+            };
+            suppressClickUntil = Date.now() + 350;
+            saveSettings();
+        }
+        button.classList.remove('stsh-dragging');
+        const pointerId = gesture.id;
+        gesture = null;
+        if (button.hasPointerCapture?.(pointerId)) button.releasePointerCapture(pointerId);
+    };
+
+    button.addEventListener('pointerup', finishGesture);
+    button.addEventListener('pointercancel', finishGesture);
+    button.addEventListener('lostpointercapture', finishGesture);
+    button.addEventListener('click', (event) => {
+        if (Date.now() < suppressClickUntil) {
+            event.preventDefault();
+            return;
+        }
+        panelOpen = !panelOpen;
+        render();
+    });
+
+    const keepVisible = () => { if (!gesture) applyButtonPosition(button); };
+    window.addEventListener('resize', keepVisible, { passive: true });
+    window.visualViewport?.addEventListener('resize', keepVisible, { passive: true });
 }
 
 function clearLegacyHistory() {
@@ -653,19 +761,17 @@ function ensureUi() {
     const button = document.createElement('button');
     button.id = `${EXTENSION_ID}-button`;
     button.type = 'button';
-    button.title = '查看模型路由记录';
+    button.title = '点击查看模型路由记录；拖动可调整位置';
     button.setAttribute('aria-label', '查看模型路由记录');
     button.innerHTML = '<span class="stsh-button-label">流式</span><span class="stsh-button-count">0</span>';
-    button.addEventListener('click', () => {
-        panelOpen = !panelOpen;
-        render();
-    });
 
     const panel = document.createElement('aside');
     panel.id = `${EXTENSION_ID}-panel`;
     panel.setAttribute('aria-label', '酒馆流式助手');
 
     document.body.append(button, panel);
+    installButtonDrag(button);
+    applyButtonPosition(button);
 }
 
 function downloadHistory() {

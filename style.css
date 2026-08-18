@@ -18,9 +18,16 @@
     border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor, #eee) 28%, transparent);
     border-radius: 999px;
     box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
-    cursor: pointer;
-    touch-action: manipulation;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
     backdrop-filter: blur(12px);
+}
+
+#st-stream-helper-button.stsh-dragging {
+    cursor: grabbing;
+    filter: brightness(1.15);
 }
 
 #st-stream-helper-button *,
